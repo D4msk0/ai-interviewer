@@ -6,24 +6,18 @@ function App() {
   const [messages, setMessages] = useState([
     { sender: 'AI', text: 'Als jij iets zou mogen ontwerpen voor de wereld van morgen — wat zou je dan maken?' },
   ]);
-  const [imageUrl, setImageUrl] = useState(null);
+  const [images, setImages] = useState([]);
+  const [selectedImageIndex, setSelectedImageIndex] = useState(null);
 
   const openaiApiKey = import.meta.env.VITE_OPENAI_API_KEY;
+  const maxQuestions = 10;
 
   const systemPrompt = `
 Je bent een creatieve, nieuwsgierige en toegankelijke AI-interviewer.
-Je taak is om studenten te helpen nadenken over hun eigen design-ideeën voor de toekomst.
-
-Je stelt gerichte, maar open vragen om hun ideeën te verkennen, zoals:
-- Wat wil je maken of ontwerpen?
-- Voor wie is het bedoeld?
-- Welk probleem lost het op?
-- Hoe zou het eruit kunnen zien of werken?
-- Welke materialen of technologieën wil je gebruiken?
-
-Je reageert altijd met een vraag of reflectie die hen helpt hun idee te verdiepen of verbeelden.
-Je houdt het positief, prikkelend en kort (max 3-4 zinnen).
-  `;
+Je taak is om studenten te begeleiden naar één concreet ontwerpidee voor de toekomst.
+Je stelt gerichte, maar open vragen om hun idee te verkennen en uit te werken.
+Je werkt toe naar een duidelijk en concreet visueel voorstel.
+`;
 
   async function fetchGPTResponse(userInput) {
     const gptMessages = [
@@ -49,85 +43,152 @@ Je houdt het positief, prikkelend en kort (max 3-4 zinnen).
     });
 
     const data = await response.json();
-
-    if (data.error) {
-      console.error("OpenAI API Error:", data.error);
-      return "Er ging iets mis met de AI-service: " + data.error.message;
-    }
-
+    if (data.error) throw new Error(data.error.message);
     return data.choices[0].message.content;
   }
 
-  async function fetchImage(prompt) {
-    const response = await fetch("https://api.openai.com/v1/images/generations", {
+  async function generateImagePromptFromInput(userInput) {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${openaiApiKey}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        prompt: prompt,
-        n: 1,
-        size: "512x512"
+        model: "gpt-4",
+        messages: [
+          {
+            role: "system",
+            content: `Je bent een AI die input van studenten omzet in een visuele beschrijving voor een AI-beeldgenerator zoals DALL·E. 
+            Je gebruikt duidelijke, beschrijvende taal. Je focust op zichtbare elementen zoals vorm, kleur, materiaal, context, omgeving, stijl. 
+            Je prompt moet geschikt zijn voor visuele representatie, en mag geen abstracte of conceptuele taal bevatten. Houd het bij één concreet idee per prompt.`
+          },
+          {
+            role: "user",
+            content: `Zet deze ontwerpinput om in een visuele beschrijving voor een AI-beelgenerator:\n"${userInput}"`
+          }
+        ],
+        temperature: 0.8
       }),
     });
 
     const data = await response.json();
+    if (data.error) throw new Error(data.error.message);
+    return data.choices[0].message.content;
+  }
 
-    if (data.error) {
-      console.error("DALL·E error:", data.error);
-      return null;
-    }
+  async function fetchImageFromPrompt(prompt) {
+    const response = await fetch("https://api.openai.com/v1/images/generations", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${openaiApiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ prompt, n: 1, size: "512x512" })
+    });
 
-    return data.data[0].url;
+    const data = await response.json();
+    if (data.error) throw new Error(data.error.message);
+    return { url: data.data[0].url, prompt };
   }
 
   const handleSend = async (userInput) => {
     const aiMessagesCount = messages.filter(m => m.sender === "AI").length;
     setMessages((prev) => [...prev, { sender: "Jij", text: userInput }]);
 
-    if (aiMessagesCount >= 10) {
-      setMessages((prev) => [
-        ...prev,
-        { sender: "AI", text: "Dat waren mijn 10 vragen. Bedankt voor het gesprek — veel succes met jouw ontwerp!" },
-      ]);
+    if (aiMessagesCount >= maxQuestions) {
+      setMessages((prev) => [...prev, { sender: "AI", text: "Dat waren mijn 10 vragen. Veel succes met jouw ontwerp!" }]);
       return;
     }
 
     try {
-      const aiReply = await fetchGPTResponse(userInput);
-      setMessages((prev) => [
-        ...prev,
-        { sender: "AI", text: aiReply },
+      const [prompt, aiReply] = await Promise.all([
+        generateImagePromptFromInput(userInput),
+        fetchGPTResponse(userInput)
       ]);
 
-      const image = await fetchImage(userInput);
-      if (image) {
-        setImageUrl(image);
+      setMessages((prev) => [...prev, { sender: "AI", text: aiReply }]);
+
+      if (prompt) {
+        const image = await fetchImageFromPrompt(prompt);
+        if (image) {
+          setImages((prev) => {
+            const newImages = [...prev, image];
+            setSelectedImageIndex(newImages.length - 1);
+            return newImages;
+          });
+        }
       }
     } catch (err) {
-      setMessages((prev) => [
-        ...prev,
-        { sender: "AI", text: "Er ging iets mis bij het ophalen van een antwoord." },
-      ]);
       console.error(err);
+      setMessages((prev) => [...prev, { sender: "AI", text: "Er ging iets mis met de AI-service." }]);
     }
   };
 
+  const aiQuestionCount = messages.filter(m => m.sender === "AI").length;
+  const currentImage = selectedImageIndex !== null ? images[selectedImageIndex] : images[images.length - 1];
+
   return (
     <div style={{ display: "flex", height: "100vh" }}>
-      {/* Chatgedeelte */}
+      {/* Chat */}
       <div style={{ flex: 2, display: "flex", flexDirection: "column" }}>
+        <div style={{ padding: "1rem", backgroundColor: "#f0f0f0", borderBottom: "1px solid #ccc" }}>
+          <strong>Vraag {Math.min(aiQuestionCount, maxQuestions)} van {maxQuestions}</strong>
+          <div style={{ height: "6px", background: "#ddd", marginTop: "4px", borderRadius: "3px" }}>
+            <div style={{
+              width: `${(aiQuestionCount / maxQuestions) * 100}%`,
+              height: "100%",
+              background: "#4caf50",
+              borderRadius: "3px",
+              transition: "width 0.3s"
+            }}></div>
+          </div>
+        </div>
         <ChatBox messages={messages} />
         <MessageInput onSend={handleSend} />
       </div>
 
-      {/* Afbeelding */}
-      <div style={{ flex: 1, padding: "1rem", backgroundColor: "#f5f5f5" }}>
-        {imageUrl ? (
-          <img src={imageUrl} alt="AI visualisatie" style={{ width: "100%", borderRadius: "8px" }} />
-        ) : (
+      {/* Beelden */}
+      <div style={{ flex: 1, padding: "1rem", backgroundColor: "#f5f5f5", overflowY: "auto" }}>
+        {images.length === 0 ? (
           <p>Er is nog geen afbeelding gegenereerd.</p>
+        ) : (
+          <>
+            {/* Groot beeld */}
+            <div style={{ marginBottom: "1rem" }}>
+              <img
+                src={currentImage?.url}
+                alt="Geselecteerd ontwerp"
+                style={{ width: "100%", borderRadius: "8px", boxShadow: "0 2px 10px rgba(0,0,0,0.2)" }}
+              />
+              <p style={{ fontSize: "0.8rem", color: "#444", marginTop: "0.5rem" }}>
+                Prompt: <em>{currentImage?.prompt}</em>
+              </p>
+            </div>
+
+            {/* Vorige beelden klein */}
+            <p style={{ fontWeight: "bold", marginBottom: "0.5rem" }}>Klik op een ontwerp om het groot te bekijken:</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+              {images.map((img, index) => (
+                <img
+                  key={index}
+                  src={img.url}
+                  alt={`Ontwerp ${index + 1}`}
+                  onClick={() => setSelectedImageIndex(index)}
+                  style={{
+                    width: "100px",
+                    height: "100px",
+                    objectFit: "cover",
+                    borderRadius: "6px",
+                    cursor: "pointer",
+                    opacity: selectedImageIndex === index ? 1 : 0.8,
+                    border: selectedImageIndex === index ? "2px solid #4caf50" : "1px solid #ccc",
+                    transition: "all 0.2s"
+                  }}
+                />
+              ))}
+            </div>
+          </>
         )}
       </div>
     </div>
