@@ -1,10 +1,14 @@
 // src/components/MessageInput.jsx
 import React, { useState } from 'react';
 
-export default function MessageInput({ onSend }) {
+export default function MessageInput({ onSend, disabled = false }) {
   const [input, setInput] = useState('');
 
   const handleSend = () => {
+    if (disabled) {
+      return;
+    }
+
     if (input.trim() !== '') {
       onSend(input);
       setInput('');
@@ -19,9 +23,12 @@ export default function MessageInput({ onSend }) {
         onChange={(e) => setInput(e.target.value)}
         style={{ flex: 1, marginRight: '0.5rem' }}
         onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-        placeholder="Typ hier je antwoord..."
+        placeholder={disabled ? 'Even geduld...' : 'Typ hier je antwoord...'}
+        disabled={disabled}
       />
-      <button onClick={handleSend}>Verstuur</button>
+      <button onClick={handleSend} disabled={disabled}>
+        {disabled ? 'Bezig...' : 'Verstuur'}
+      </button>
     </div>
   );
 }
